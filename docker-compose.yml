@@ -1,0 +1,198 @@
+services:
+  user-db:
+    image: postgres:15
+    container_name: user-db
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: userdb
+    volumes:
+      - user-db-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - delivery-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  user-service:
+    build: ./user-service
+    container_name: user-service
+    environment:
+      DATABASE_URL: postgresql://user:password@user-db:5432/userdb
+      SECRET_KEY: your-secret-key-change-in-production
+    ports:
+      - "8001:8001"
+    depends_on:
+      user-db:
+        condition: service_healthy
+    networks:
+      - delivery-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  catalog-db:
+    image: postgres:15
+    container_name: catalog-db
+    environment:
+      POSTGRES_USER: catalog
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: catalogdb
+    volumes:
+      - catalog-db-data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    networks:
+      - delivery-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U catalog"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  catalog-service:
+    build: ./catalog-service
+    container_name: catalog-service
+    environment:
+      DATABASE_URL: postgresql://catalog:password@catalog-db:5432/catalogdb
+      USER_SERVICE_URL: http://user-service:8001
+      SECRET_KEY: your-secret-key-change-in-production
+    ports:
+      - "8002:8002"
+    depends_on:
+      catalog-db:
+        condition: service_healthy
+      user-service:
+        condition: service_healthy
+    networks:
+      - delivery-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  order-db:
+    image: postgres:15
+    container_name: order-db
+    environment:
+      POSTGRES_USER: order
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: orderdb
+    volumes:
+      - order-db-data:/var/lib/postgresql/data
+    ports:
+      - "5434:5432"
+    networks:
+      - delivery-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U order"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  order-service:
+    build: ./order-managament-service
+    container_name: order-service
+    environment:
+      DATABASE_URL: postgresql://order:password@order-db:5432/orderdb
+      USER_SERVICE_URL: http://user-service:8001
+      CATALOG_SERVICE_URL: http://catalog-service:8002
+      PAYMENT_SERVICE_URL: http://payment-service:8004
+      SECRET_KEY: your-secret-key-change-in-production
+    ports:
+      - "8003:8003"
+    depends_on:
+      order-db:
+        condition: service_healthy
+      user-service:
+        condition: service_healthy
+      catalog-service:
+        condition: service_healthy
+    networks:
+      - delivery-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  payment-service:
+    build: ./payment-service
+    container_name: payment-service
+    environment:
+      ORDER_SERVICE_URL: http://order-service:8003
+    ports:
+      - "8004:8004"
+    networks:
+      - delivery-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8004/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    ports:
+      - "9090:9090"
+    networks:
+      - delivery-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=http://localhost:3000
+      - GF_INSTALL_PLUGINS=
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+    ports:
+      - "3000:3000"
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    networks:
+      - delivery-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  delivery-network:
+    driver: bridge
+
+volumes:
+  user-db-data:
+  catalog-db-data:
+  order-db-data:
+  prometheus-data:
+  grafana-data:
